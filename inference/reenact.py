@@ -393,7 +393,7 @@ def render_appearance_map(fig, tri, points, query_point=None, render_scale=99.):
         tri_vertices = tri.simplices[tri_index]
         plt.plot(points_scaled[tri_vertices, 0], points_scaled[tri_vertices, 1], 'yo', markersize=12)
         plt.plot(query_point_scaled[0], query_point_scaled[1], 'rx', markersize=24, markeredgewidth=4)
-
+#
     plt.xlim(points_scaled[:-4, 0].min() - 0.5, points_scaled[:-4, 0].max() + 0.5)
     plt.ylim(points_scaled[:-4, 1].min() - 0.5, points_scaled[:-4, 1].max() + 0.5)
     plt.xlabel('Yaw (angles)', fontsize=24)
