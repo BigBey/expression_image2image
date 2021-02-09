@@ -50,6 +50,7 @@ def set_device(gpus=None, use_cuda=True):
     Returns:
         torch.device: The selected computing device.
     """
+    print(use_cuda)
     use_cuda = torch.cuda.is_available() if use_cuda else use_cuda
     if use_cuda:
         gpus = list(range(torch.cuda.device_count())) if not gpus else gpus
@@ -58,7 +59,7 @@ def set_device(gpus=None, use_cuda=True):
         gpus = None
         print('=> using CPU device')
     device = torch.device('cuda:{}'.format(gpus[0])) if gpus else torch.device('cpu')
-
+    print(device, gpus)
     return device, gpus
 
 

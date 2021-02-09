@@ -205,6 +205,7 @@ class VideoProcessBase(object):
 
         # Support multiple GPUs
         if self.gpus and len(self.gpus) > 1:
+            print('run')
             self.face_pose = nn.DataParallel(self.face_pose, self.gpus) if self.face_pose is not None else None
             self.L = nn.DataParallel(self.L, self.gpus) if self.L is not None else None
             self.S = nn.DataParallel(self.S, self.gpus) if self.S is not None else None

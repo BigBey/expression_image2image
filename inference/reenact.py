@@ -37,8 +37,8 @@ parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.A
                                  parents=[base_parser])
 parser.add_argument('source', metavar='SOURCE', nargs='+',
                     help='image or video per source: files, directories, file lists or queries')
-parser.add_argument('-t', '--target', metavar='TARGET', nargs='+',
-                    help='video per target: files, directories, file lists or queries')
+parser.add_argument('-e', '--emotion', type=str, metavar='TARGET', nargs='+',
+                        help='emotion, which can be on source face')
 parser.add_argument('-o', '--output', metavar='DIR',
                     help='output directory')
 parser.add_argument('-ss', '--select_source', default='longest', metavar='STR',
@@ -71,6 +71,33 @@ finetune.add_argument('-fs', '--finetune_save', action='store_true',
                       help='enable saving finetune checkpoint')
 d = parser.get_default
 
+def get_emotion_path(emotion):
+    emotions_path = '../emotions/'
+    emotions = {
+        'com' : 'comfortable',
+        'hap' : 'happy',
+        'ins' : 'inspirational',
+        'joy' : 'joy',
+        'lon' : 'lonely',
+        'fun' : 'funny',
+        'nos' : 'nostalgic',
+        'pas' : 'passionate',
+        'qui' : 'quiet',
+        'rel' : 'relaxed',
+        'rom' : 'romantic',
+        'sad' : 'sadness',
+        'sou' : 'soulful',
+        'swe' : 'sweet',
+        'ser' : 'serious',
+        'ang' : 'anger',
+        'war' : 'wary',
+        'sur' : 'surprise',
+        'fea' : 'fear'
+    }
+    if emotion in emotions:
+        return emotions_path + emotions[emotion] + '/' + emotions[emotion] + '_man.jpg'
+    else:
+        return None
 
 class FaceReenactment(VideoProcessBase):
     def __init__(self, resolution=d('resolution'), crop_scale=d('crop_scale'), gpus=d('gpus'),
@@ -131,6 +158,7 @@ class FaceReenactment(VideoProcessBase):
 
         # Initialize losses
         self.criterion_pixelwise = nn.L1Loss().to(self.device)
+        self.device = torch.device('cpu')
         self.criterion_id = obj_factory(criterion_id).to(self.device)
 
         # Support multiple GPUs
@@ -332,9 +360,11 @@ class FaceReenactmentRenderer(VideoRenderer):
 
     def on_render(self, *args):
         if self._verbose <= 0:
-            return tensor2bgr(args[0])
+            write_bgr = tensor2bgr(args[0])
+            #return write_bgr
         elif self._verbose == 1:
-            return tensor2bgr(torch.cat(args, dim=2))
+            write_bgr = tensor2bgr(torch.cat(args, dim=2))
+            #return write_bgr
         else:
             if self._fig is None:
                 self._fig = plt.figure(figsize=self._figsize)
@@ -348,8 +378,9 @@ class FaceReenactmentRenderer(VideoRenderer):
             tgt_pose *= 99.     # Unnormalize the target pose for printing
             msg = 'Pose: %.1f, %.1f, %.1f' % (tgt_pose[0], tgt_pose[1], tgt_pose[2])
             cv2.putText(render_bgr, msg, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-
-            return render_bgr
+            write_bgr = render_bgr
+        cv2.imwrite(r'C:\Users\zenbook\Documents\examples\example.jpg', write_bgr)
+        return write_bgr
 
 
 def render_appearance_map(fig, tri, points, query_point=None, render_scale=99.):
@@ -391,7 +422,7 @@ def select_seq(seq_list, select='longest'):
     return seq
 
 
-def main(source, target, output=None, select_source=d('select_source'), select_target=d('select_target'),
+def main(source, emotion, output=None, select_source=d('select_source'), select_target=d('select_target'),
          # General arguments
          resolution=d('resolution'), crop_scale=d('crop_scale'), gpus=d('gpus'),
          cpu_only=d('cpu_only'), display=d('display'), verbose=d('verbose'), encoder_codec=d('encoder_codec'),
@@ -419,7 +450,7 @@ def main(source, target, output=None, select_source=d('select_source'), select_t
          batch_size=d('batch_size'), reenactment_model=d('reenactment_model'), criterion_id=d('criterion_id'),
          min_radius=d('min_radius'), renderer_process=d('renderer_process')):
     face_reenactment = FaceReenactment(
-        resolution, crop_scale, gpus, cpu_only, display, verbose, encoder_codec,
+        resolution, crop_scale, gpus, True, display, verbose, encoder_codec,
         detection_model=detection_model, det_batch_size=det_batch_size, det_postfix=det_postfix,
         iou_thresh=iou_thresh, min_length=min_length, min_size=min_size, center_kernel=center_kernel,
         size_kernel=size_kernel, smooth_det=smooth_det, seq_postfix=seq_postfix, write_empty=write_empty,
@@ -434,11 +465,16 @@ def main(source, target, output=None, select_source=d('select_source'), select_t
         finetune_batch_size=finetune_batch_size, finetune_workers=finetune_workers, finetune_save=finetune_save,
         batch_size=batch_size, reenactment_model=reenactment_model, criterion_id=criterion_id, min_radius=min_radius,
         renderer_process=renderer_process)
-    if len(source) == 1 and len(target) == 1 and os.path.isfile(source[0]) and os.path.isfile(target[0]):
-        face_reenactment(source[0], target[0], output, select_source, select_target)
+    if len(source) == 1 and len(emotion) == 1 and os.path.isfile(source[0]) and get_emotion_path(emotion[0]):
+        face_reenactment(source[0], get_emotion_path(emotion[0]), output, select_source, select_target)
     else:
-        batch(source, target, output, face_reenactment, postfix='.mp4', skip_existing=True)
+        batch(source, get_emotion_path(emotion[0]), output, face_reenactment, postfix='.mp4', skip_existing=True)
 
 
 if __name__ == "__main__":
-    main(**vars(parser.parse_args()))
+    args = parser.parse_args()
+    if get_emotion_path(args.emotion[0]) == None:
+        print('ERROR: This emotion is unavailable.')
+    else:
+        main(**vars(parser.parse_args()))
+
