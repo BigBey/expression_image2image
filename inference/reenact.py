@@ -95,7 +95,7 @@ def get_emotion_path(emotion):
         'fea' : 'fear'
     }
     if emotion in emotions:
-        return emotions_path + emotions[emotion] + '/' + emotions[emotion] + '_man.jpg'
+        return emotions_path + emotions[emotion] + '/man/adult/' + emotions[emotion] + '_man_adult.jpg'
     else:
         return None
 
@@ -379,7 +379,7 @@ class FaceReenactmentRenderer(VideoRenderer):
             msg = 'Pose: %.1f, %.1f, %.1f' % (tgt_pose[0], tgt_pose[1], tgt_pose[2])
             cv2.putText(render_bgr, msg, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
             write_bgr = render_bgr
-        cv2.imwrite(r'C:\Users\zenbook\Documents\examples\example.jpg', write_bgr)
+        cv2.imwrite(r'C:\Users\zenbook\Documents\examples\result.jpg', write_bgr)
         return write_bgr
 
 
