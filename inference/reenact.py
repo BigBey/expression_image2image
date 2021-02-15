@@ -31,14 +31,18 @@ from fsgan.datasets.seq_dataset import SingleSeqRandomPairDataset
 from fsgan.datasets.appearance_map import AppearanceMapDataset
 from fsgan.utils.video_renderer import VideoRenderer
 from fsgan.utils.batch import main as batch
-
+from tensorflow.keras.utils import get_file
+from pathlib import Path
+import dlib
+from omegaconf import OmegaConf
+from fsgan.age_gender_estimation.src.factory import get_model
 
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter,
                                  parents=[base_parser])
 parser.add_argument('source', metavar='SOURCE', nargs='+',
                     help='image or video per source: files, directories, file lists or queries')
 parser.add_argument('-e', '--emotion', type=str, metavar='TARGET', nargs='+',
-                        help='emotion, which can be on source face')
+                    help='emotion, which can be on source face')
 parser.add_argument('-o', '--output', metavar='DIR',
                     help='output directory')
 parser.add_argument('-ss', '--select_source', default='longest', metavar='STR',
@@ -71,60 +75,123 @@ finetune.add_argument('-fs', '--finetune_save', action='store_true',
                       help='enable saving finetune checkpoint')
 d = parser.get_default
 
-def get_emotion_path(emotion):
+
+def estimate_age_and_gender(image_path):
+    pretrained_model = "https://github.com/yu4u/age-gender-estimation/releases/download/v0.6/EfficientNetB3_224_weights.11-3.44.hdf5"
+    modhash = '6d7f7b7ced093a8b3ef6399163da6ece'
+
+    weight_file = get_file("EfficientNetB3_224_weights.11-3.44.hdf5", pretrained_model,
+                           cache_subdir="pretrained_models",
+                           file_hash=modhash, cache_dir=str(Path(__file__).resolve().parent))
+    margin = 0.4
+
+    # for face detection
+    detector = dlib.get_frontal_face_detector()
+
+    # load model and weights
+    model_name, img_size = Path(weight_file).stem.split("_")[:2]
+    img_size = int(img_size)
+    cfg = OmegaConf.from_dotlist([f"model.model_name={model_name}", f"model.img_size={img_size}"])
+    model = get_model(cfg)
+    model.load_weights(weight_file)
+
+    img = cv2.imread(image_path[0], 1)
+
+    input_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img_h, img_w, _ = np.shape(input_img)
+
+    # detect faces using dlib detector
+    detected = detector(input_img, 1)
+    faces = np.empty((len(detected), img_size, img_size, 3))
+
+    if len(detected) > 0:
+        for i, d in enumerate(detected):
+            x1, y1, x2, y2, w, h = d.left(), d.top(), d.right() + 1, d.bottom() + 1, d.width(), d.height()
+            xw1 = max(int(x1 - margin * w), 0)
+            yw1 = max(int(y1 - margin * h), 0)
+            xw2 = min(int(x2 + margin * w), img_w - 1)
+            yw2 = min(int(y2 + margin * h), img_h - 1)
+            cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 0), 2)
+            # cv2.rectangle(img, (xw1, yw1), (xw2, yw2), (255, 0, 0), 2)
+            faces[i] = cv2.resize(img[yw1:yw2 + 1, xw1:xw2 + 1], (img_size, img_size))
+
+        # predict ages and genders of the detected faces
+        results = model.predict(faces)
+        predicted_genders = results[0]
+        ages = np.arange(0, 101).reshape(101, 1)
+        predicted_ages = results[1].dot(ages).flatten()
+        # label = "{}, {}".format(int(predicted_ages[i]),
+        #                        "M" if predicted_genders[i][0] < 0.5 else "F")
+        return (int(predicted_ages[i]), "M" if predicted_genders[i][0] < 0.5 else "F")
+
+
+def get_emotion_path(emotion, gender, age):
     emotions_path = '../emotions/'
     emotions = {
-        'com' : 'comfortable',
-        'hap' : 'happy',
-        'ins' : 'inspirational',
-        'joy' : 'joy',
-        'lon' : 'lonely',
-        'fun' : 'funny',
-        'nos' : 'nostalgic',
-        'pas' : 'passionate',
-        'qui' : 'quiet',
-        'rel' : 'relaxed',
-        'rom' : 'romantic',
-        'sad' : 'sadness',
-        'sou' : 'soulful',
-        'swe' : 'sweet',
-        'ser' : 'serious',
-        'ang' : 'anger',
-        'war' : 'wary',
-        'sur' : 'surprise',
-        'fea' : 'fear'
+        'com': 'comfortable',
+        'hap': 'happy',
+        'ins': 'inspirational',
+        'joy': 'joy',
+        'lon': 'lonely',
+        'fun': 'funny',
+        'nos': 'nostalgic',
+        'pas': 'passionate',
+        'qui': 'quiet',
+        'rel': 'relaxed',
+        'rom': 'romantic',
+        'sad': 'sadness',
+        'sou': 'soulful',
+        'swe': 'sweet',
+        'ser': 'serious',
+        'ang': 'anger',
+        'war': 'wary',
+        'sur': 'surprise',
+        'fea': 'fear'
     }
+    genders = {
+        'M': 'man',
+        'F': 'woman'
+    }
+
+    if 1 <= age < 15:
+        gen = 'young'
+    elif 15 <= age <= 55:
+        gen = 'adult'
+    elif age > 55:
+        gen = 'old'
+
     if emotion in emotions:
-        return emotions_path + emotions[emotion] + '/man/adult/' + emotions[emotion] + '_man_adult.jpg'
+        return fr'{emotions_path}{emotions[emotion]}/{genders[gender]}/{gen}/{emotions[emotion]}_{genders[gender]}_{gen}.jpg'
     else:
         return None
 
+
 class FaceReenactment(VideoProcessBase):
     def __init__(self, resolution=d('resolution'), crop_scale=d('crop_scale'), gpus=d('gpus'),
-        cpu_only=d('cpu_only'), display=d('display'), verbose=d('verbose'), encoder_codec=d('encoder_codec'),
-        # Detection arguments:
-        detection_model=d('detection_model'), det_batch_size=d('det_batch_size'), det_postfix=d('det_postfix'),
-        # Sequence arguments:
-        iou_thresh=d('iou_thresh'), min_length=d('min_length'), min_size=d('min_size'),
-        center_kernel=d('center_kernel'), size_kernel=d('size_kernel'), smooth_det=d('smooth_det'),
-        seq_postfix=d('seq_postfix'), write_empty=d('write_empty'),
-        # Pose arguments:
-        pose_model=d('pose_model'), pose_batch_size=d('pose_batch_size'), pose_postfix=d('pose_postfix'),
-        cache_pose=d('cache_pose'), cache_frontal=d('cache_frontal'), smooth_poses=d('smooth_poses'),
-        # Landmarks arguments:
-        lms_model=d('lms_model'), lms_batch_size=d('lms_batch_size'), landmarks_postfix=d('landmarks_postfix'),
-        cache_landmarks=d('cache_landmarks'), smooth_landmarks=d('smooth_landmarks'),
-        # Segmentation arguments:
-        seg_model=d('seg_model'), smooth_segmentation=d('smooth_segmentation'),
-        segmentation_postfix=d('segmentation_postfix'), cache_segmentation=d('cache_segmentation'),
-        seg_batch_size=d('seg_batch_size'), seg_remove_mouth=d('seg_remove_mouth'),
-        # Finetune arguments:
-        finetune=d('finetune'), finetune_iterations=d('finetune_iterations'), finetune_lr=d('finetune_lr'),
-        finetune_batch_size=d('finetune_batch_size'), finetune_workers=d('finetune_workers'),
-        finetune_save=d('finetune_save'),
-        # Reenactment arguments:
-        batch_size=d('batch_size'), reenactment_model=d('reenactment_model'), criterion_id=d('criterion_id'),
-        min_radius=d('min_radius'), renderer_process=d('renderer_process')):
+                 cpu_only=d('cpu_only'), display=d('display'), verbose=d('verbose'), encoder_codec=d('encoder_codec'),
+                 # Detection arguments:
+                 detection_model=d('detection_model'), det_batch_size=d('det_batch_size'), det_postfix=d('det_postfix'),
+                 # Sequence arguments:
+                 iou_thresh=d('iou_thresh'), min_length=d('min_length'), min_size=d('min_size'),
+                 center_kernel=d('center_kernel'), size_kernel=d('size_kernel'), smooth_det=d('smooth_det'),
+                 seq_postfix=d('seq_postfix'), write_empty=d('write_empty'),
+                 # Pose arguments:
+                 pose_model=d('pose_model'), pose_batch_size=d('pose_batch_size'), pose_postfix=d('pose_postfix'),
+                 cache_pose=d('cache_pose'), cache_frontal=d('cache_frontal'), smooth_poses=d('smooth_poses'),
+                 # Landmarks arguments:
+                 lms_model=d('lms_model'), lms_batch_size=d('lms_batch_size'), landmarks_postfix=d('landmarks_postfix'),
+                 cache_landmarks=d('cache_landmarks'), smooth_landmarks=d('smooth_landmarks'),
+                 # Segmentation arguments:
+                 seg_model=d('seg_model'), smooth_segmentation=d('smooth_segmentation'),
+                 segmentation_postfix=d('segmentation_postfix'), cache_segmentation=d('cache_segmentation'),
+                 seg_batch_size=d('seg_batch_size'), seg_remove_mouth=d('seg_remove_mouth'),
+                 # Finetune arguments:
+                 finetune=d('finetune'), finetune_iterations=d('finetune_iterations'), finetune_lr=d('finetune_lr'),
+                 finetune_batch_size=d('finetune_batch_size'), finetune_workers=d('finetune_workers'),
+                 finetune_save=d('finetune_save'),
+                 # Reenactment arguments:
+                 batch_size=d('batch_size'), reenactment_model=d('reenactment_model'), criterion_id=d('criterion_id'),
+                 min_radius=d('min_radius'), renderer_process=d('renderer_process')):
         super(FaceReenactment, self).__init__(
             resolution, crop_scale, gpus, cpu_only, display, verbose, encoder_codec,
             detection_model=detection_model, det_batch_size=det_batch_size, det_postfix=det_postfix,
@@ -320,7 +387,10 @@ class FaceReenactment(VideoProcessBase):
             if self.verbose == 0:
                 self.video_renderer.write(reenactment_tensor)
             elif self.verbose == 1:
-                self.video_renderer.write(src_frame[0][:, 0], src_frame[0][:, 1], src_frame[0][:, 2],
+                print((src_frame[0][:, 0][0], reenactment_tensor[0], tgt_frame[0]))
+                write_bgr = tensor2bgr(torch.cat((src_frame[0][:, 0][0], reenactment_tensor[0], tgt_frame[0]), dim=2))
+                cv2.imwrite(fr'{output_path}.jpg', write_bgr)
+                self.video_renderer.write(src_frame[0][:, 0],
                                           reenactment_tensor, tgt_frame)
             else:
                 self.video_renderer.write(src_frame[0][:, 0], src_frame[0][:, 1], src_frame[0][:, 2],
@@ -361,10 +431,11 @@ class FaceReenactmentRenderer(VideoRenderer):
     def on_render(self, *args):
         if self._verbose <= 0:
             write_bgr = tensor2bgr(args[0])
-            #return write_bgr
+            # return write_bgr
         elif self._verbose == 1:
+            print(args)
             write_bgr = tensor2bgr(torch.cat(args, dim=2))
-            #return write_bgr
+            # return write_bgr
         else:
             if self._fig is None:
                 self._fig = plt.figure(figsize=self._figsize)
@@ -375,7 +446,7 @@ class FaceReenactmentRenderer(VideoRenderer):
             appearance_map_bgr = cv2.resize(appearance_map_bgr, self._appearance_map_size,
                                             interpolation=cv2.INTER_CUBIC)
             render_bgr = np.concatenate((appearance_map_bgr, results_bgr), axis=1)
-            tgt_pose *= 99.     # Unnormalize the target pose for printing
+            tgt_pose *= 99.  # Unnormalize the target pose for printing
             msg = 'Pose: %.1f, %.1f, %.1f' % (tgt_pose[0], tgt_pose[1], tgt_pose[2])
             cv2.putText(render_bgr, msg, (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
             write_bgr = render_bgr
@@ -450,7 +521,7 @@ def main(source, emotion, output=None, select_source=d('select_source'), select_
          batch_size=d('batch_size'), reenactment_model=d('reenactment_model'), criterion_id=d('criterion_id'),
          min_radius=d('min_radius'), renderer_process=d('renderer_process')):
     face_reenactment = FaceReenactment(
-        resolution, crop_scale, gpus, True, display, verbose, encoder_codec,
+        resolution, crop_scale, gpus, True, display, 1, encoder_codec,
         detection_model=detection_model, det_batch_size=det_batch_size, det_postfix=det_postfix,
         iou_thresh=iou_thresh, min_length=min_length, min_size=min_size, center_kernel=center_kernel,
         size_kernel=size_kernel, smooth_det=smooth_det, seq_postfix=seq_postfix, write_empty=write_empty,
@@ -465,16 +536,19 @@ def main(source, emotion, output=None, select_source=d('select_source'), select_
         finetune_batch_size=finetune_batch_size, finetune_workers=finetune_workers, finetune_save=finetune_save,
         batch_size=batch_size, reenactment_model=reenactment_model, criterion_id=criterion_id, min_radius=min_radius,
         renderer_process=renderer_process)
-    if len(source) == 1 and len(emotion) == 1 and os.path.isfile(source[0]) and get_emotion_path(emotion[0]):
-        face_reenactment(source[0], get_emotion_path(emotion[0]), output, select_source, select_target)
-    else:
-        batch(source, get_emotion_path(emotion[0]), output, face_reenactment, postfix='.mp4', skip_existing=True)
+    # if len(source) == 1 and len(emotion) == 1 and os.path.isfile(source[0]) and os.path.isfile(get_emotion_path(emotion[0])):
+    age, gender = estimate_age_and_gender(source)
+    face_reenactment(source[0], get_emotion_path(emotion[0], gender, age), output, select_source, select_target)
+    # else:
+    #    batch(source, get_emotion_path(emotion[0]), output, face_reenactment, postfix='.mp4', skip_existing=True)
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
-    if get_emotion_path(args.emotion[0]) == None:
+    age, gender = estimate_age_and_gender(args.source)
+    #print(estimate_age_and_gender(args.source))
+    #print(get_emotion_path(args.emotion[0]))
+    if get_emotion_path(args.emotion[0], gender, age) == None:
         print('ERROR: This emotion is unavailable.')
     else:
         main(**vars(parser.parse_args()))
-
